@@ -219,6 +219,7 @@ static const CGFloat kFlashIconSize = 26.0;
                              systemTrayItemIdentifier:kTrayIdentifier];
         }
         self.flashVisible = YES;
+        NSLog(@"TouchBarStatus: flash presented");
     }
     // Restart the countdown so rapid cmd-tabbing keeps showing the latest app.
     [self.dismissTimer invalidate];
@@ -237,6 +238,7 @@ static const CGFloat kFlashIconSize = 26.0;
         [NSTouchBar dismissSystemModalFunctionBar:self.flashBar];
     }
     self.flashVisible = NO;
+    NSLog(@"TouchBarStatus: flash dismissed");
 }
 
 - (void)applicationWillTerminate:(NSNotification *)note {

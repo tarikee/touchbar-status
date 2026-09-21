@@ -22,8 +22,11 @@ int main(int argc, const char *argv[]) {
                 CIImage *ci = [CIImage imageWithIOSurface:surface];
                 NSBitmapImageRep *bmp = [[NSBitmapImageRep alloc] initWithCIImage:ci];
                 NSData *png = [bmp representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-                [png writeToFile:[NSString stringWithUTF8String:outPath] atomically:YES];
-                NSLog(@"CAP: frame %d written (%lu bytes)", frames, (unsigned long)png.length);
+                NSString *tmpl = [NSString stringWithUTF8String:outPath];
+                NSString *path = [tmpl containsString:@"%d"]
+                    ? [NSString stringWithFormat:tmpl, frames] : tmpl;
+                [png writeToFile:path atomically:YES];
+                NSLog(@"CAP: frame %d -> %@ (%lu bytes)", frames, path.lastPathComponent, (unsigned long)png.length);
             });
         if (!stream) { NSLog(@"CAP: NULL stream"); return 3; }
         CGDisplayStreamStart(stream);
