@@ -17,6 +17,15 @@
 //  Requires NO permissions: NSWorkspace's frontmostApplication and its
 //  activation notifications are unprivileged.
 //
+//  Configurable without any GUI (deliberate — this runs on a machine where
+//  System Settings is unreachable):
+//
+//    defaults write com.tarik.touchbarstatus FlashDuration -float 2.5
+//    defaults write com.tarik.touchbarstatus FlashEnabled -bool NO
+//    defaults write com.tarik.touchbarstatus TrayIconSize -float 26
+//
+//  Changes apply live; no restart needed.
+//
 
 #import <Cocoa/Cocoa.h>
 
@@ -43,16 +52,46 @@ extern void DFRSystemModalShowsCloseBoxWhenFrontMost(BOOL show);
 
 static NSString *const kTrayIdentifier  = @"com.tarik.touchbarstatus.tray";
 static NSString *const kFlashIdentifier = @"com.tarik.touchbarstatus.flash";
+static NSString *const kControlStripBundleID = @"com.apple.controlstrip";
 
-/// How long the full-width name stays up before handing the bar back.
-static const NSTimeInterval kFlashDuration = 1.5;
-static const CGFloat kTrayIconSize  = 24.0;
-static const CGFloat kFlashIconSize = 26.0;
+#pragma mark - Defaults keys
+
+static NSString *const kFlashEnabled     = @"FlashEnabled";
+static NSString *const kFlashDuration    = @"FlashDuration";
+static NSString *const kTrayIconSize     = @"TrayIconSize";
+static NSString *const kFlashIconSize    = @"FlashIconSize";
+static NSString *const kFlashFontSize    = @"FlashFontSize";
+static NSString *const kReassertInterval = @"ReassertInterval";
+
+static void RegisterDefaultConfig(void) {
+    [[NSUserDefaults standardUserDefaults] registerDefaults:@{
+        kFlashEnabled:     @YES,
+        kFlashDuration:    @1.5,
+        kTrayIconSize:     @24.0,
+        kFlashIconSize:    @26.0,
+        kFlashFontSize:    @18.0,
+        kReassertInterval: @15.0,
+    }];
+}
+
+/// Read fresh each time so `defaults write` from a shell takes effect live.
+static double ConfigDouble(NSString *key, double minimum, double maximum) {
+    double v = [[NSUserDefaults standardUserDefaults] doubleForKey:key];
+    if (v < minimum) v = minimum;
+    if (v > maximum) v = maximum;
+    return v;
+}
+
+static BOOL ConfigBool(NSString *key) {
+    return [[NSUserDefaults standardUserDefaults] boolForKey:key];
+}
 
 #pragma mark - Tray view (permanent Control Strip icon)
 
 @interface TrayView : NSView
 @property (strong) NSImageView *iconView;
+@property (strong) NSLayoutConstraint *iconWidth;
+@property (strong) NSLayoutConstraint *iconHeight;
 @end
 
 @implementation TrayView
@@ -64,18 +103,23 @@ static const CGFloat kFlashIconSize = 26.0;
     _iconView.imageScaling = NSImageScaleProportionallyDown;
     _iconView.translatesAutoresizingMaskIntoConstraints = NO;
     [self addSubview:_iconView];
+
+    _iconWidth  = [_iconView.widthAnchor constraintEqualToConstant:24];
+    _iconHeight = [_iconView.heightAnchor constraintEqualToConstant:24];
     [NSLayoutConstraint activateConstraints:@[
         [_iconView.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
         [_iconView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-        [_iconView.widthAnchor constraintEqualToConstant:kTrayIconSize],
-        [_iconView.heightAnchor constraintEqualToConstant:kTrayIconSize],
+        _iconWidth, _iconHeight,
     ]];
     return self;
 }
 
 - (void)setIcon:(NSImage *)icon name:(NSString *)name {
+    CGFloat size = ConfigDouble(kTrayIconSize, 8, 30);
+    self.iconWidth.constant = size;
+    self.iconHeight.constant = size;
     NSImage *sized = [icon copy];
-    sized.size = NSMakeSize(kTrayIconSize, kTrayIconSize);
+    sized.size = NSMakeSize(size, size);
     self.iconView.image = sized;
     self.toolTip = name;
 }
@@ -87,6 +131,8 @@ static const CGFloat kFlashIconSize = 26.0;
 @interface FlashView : NSView
 @property (strong) NSImageView *iconView;
 @property (strong) NSTextField *label;
+@property (strong) NSLayoutConstraint *iconWidth;
+@property (strong) NSLayoutConstraint *iconHeight;
 @end
 
 @implementation FlashView
@@ -100,7 +146,6 @@ static const CGFloat kFlashIconSize = 26.0;
     _iconView.translatesAutoresizingMaskIntoConstraints = NO;
 
     _label = [NSTextField labelWithString:@""];
-    _label.font = [NSFont systemFontOfSize:18 weight:NSFontWeightSemibold];
     _label.textColor = [NSColor labelColor];
     _label.lineBreakMode = NSLineBreakByTruncatingTail;
     _label.translatesAutoresizingMaskIntoConstraints = NO;
@@ -108,12 +153,12 @@ static const CGFloat kFlashIconSize = 26.0;
     [self addSubview:_iconView];
     [self addSubview:_label];
 
+    _iconWidth  = [_iconView.widthAnchor constraintEqualToConstant:26];
+    _iconHeight = [_iconView.heightAnchor constraintEqualToConstant:26];
     [NSLayoutConstraint activateConstraints:@[
         [_iconView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:12],
         [_iconView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-        [_iconView.widthAnchor constraintEqualToConstant:kFlashIconSize],
-        [_iconView.heightAnchor constraintEqualToConstant:kFlashIconSize],
-
+        _iconWidth, _iconHeight,
         [_label.leadingAnchor constraintEqualToAnchor:_iconView.trailingAnchor constant:10],
         [_label.trailingAnchor constraintLessThanOrEqualToAnchor:self.trailingAnchor constant:-12],
         [_label.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
@@ -122,9 +167,15 @@ static const CGFloat kFlashIconSize = 26.0;
 }
 
 - (void)setIcon:(NSImage *)icon name:(NSString *)name {
+    CGFloat size = ConfigDouble(kFlashIconSize, 8, 30);
+    self.iconWidth.constant = size;
+    self.iconHeight.constant = size;
     NSImage *sized = [icon copy];
-    sized.size = NSMakeSize(kFlashIconSize, kFlashIconSize);
+    sized.size = NSMakeSize(size, size);
     self.iconView.image = sized;
+
+    self.label.font = [NSFont systemFontOfSize:ConfigDouble(kFlashFontSize, 8, 26)
+                                        weight:NSFontWeightSemibold];
     self.label.stringValue = name;
 }
 
@@ -138,29 +189,39 @@ static const CGFloat kFlashIconSize = 26.0;
 @property (strong) NSTouchBar *flashBar;
 @property (strong) FlashView *flashView;
 @property (strong) NSTimer *dismissTimer;
+@property (strong) NSTimer *reassertTimer;
 @property (assign) BOOL flashVisible;
-@property (copy)   NSString *currentName;
+@property (assign) pid_t controlStripPID;
 @end
 
 @implementation AppDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)note {
+    RegisterDefaultConfig();
     DFRSystemModalShowsCloseBoxWhenFrontMost(NO);
+
     [self buildTrayItem];
     [self buildFlashBar];
 
-    [[NSWorkspace sharedWorkspace].notificationCenter
-        addObserver:self
-           selector:@selector(activeAppChanged:)
-               name:NSWorkspaceDidActivateApplicationNotification
-             object:nil];
+    NSNotificationCenter *ws = [NSWorkspace sharedWorkspace].notificationCenter;
+    [ws addObserver:self selector:@selector(activeAppChanged:)
+               name:NSWorkspaceDidActivateApplicationNotification object:nil];
 
-    // Seed with whatever has focus right now, without flashing on launch.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(configChanged:)
+                                                 name:NSUserDefaultsDidChangeNotification
+                                               object:nil];
+
+    self.controlStripPID = [self currentControlStripPID];
+    [self restartReassertTimer];
+
     NSRunningApplication *front = [NSWorkspace sharedWorkspace].frontmostApplication;
     if (front) [self applyApp:front flash:NO];
 
     NSLog(@"TouchBarStatus: ready");
 }
+
+#pragma mark Setup
 
 - (void)buildTrayItem {
     self.trayView = [[TrayView alloc] initWithFrame:NSMakeRect(0, 0, 64, 30)];
@@ -175,10 +236,66 @@ static const CGFloat kFlashIconSize = 26.0;
     NSCustomTouchBarItem *flashItem =
         [[NSCustomTouchBarItem alloc] initWithIdentifier:kFlashIdentifier];
     flashItem.view = self.flashView;
-
     self.flashBar = [[NSTouchBar alloc] init];
     self.flashBar.defaultItemIdentifiers = @[kFlashIdentifier];
     self.flashBar.templateItems = [NSSet setWithObject:flashItem];
+}
+
+#pragma mark Control Strip presence
+
+/// Cheap and idempotent: just re-assert the registration.
+- (void)assertPresence {
+    DFRElementSetControlStripPresenceForIdentifier(kTrayIdentifier, YES);
+}
+
+/// Heavier: re-supply the view too, for when ControlStrip.app has restarted
+/// and forgotten us entirely.
+- (void)reinstallTrayItem {
+    [NSTouchBarItem removeSystemTrayItem:self.trayItem];
+    [NSTouchBarItem addSystemTrayItem:self.trayItem];
+    DFRElementSetControlStripPresenceForIdentifier(kTrayIdentifier, YES);
+    NSLog(@"TouchBarStatus: tray item reinstalled");
+}
+
+/// ControlStrip.app is a background agent, so NSWorkspace never posts a launch
+/// notification for it. Poll its pid instead: a change means it restarted and
+/// has forgotten our registration.
+- (pid_t)currentControlStripPID {
+    NSArray<NSRunningApplication *> *apps =
+        [NSRunningApplication runningApplicationsWithBundleIdentifier:kControlStripBundleID];
+    return apps.firstObject ? apps.firstObject.processIdentifier : 0;
+}
+
+- (void)checkControlStripRestart {
+    pid_t pid = [self currentControlStripPID];
+    if (pid == 0) return;                       // between restarts; try again next tick
+    if (self.controlStripPID == 0) { self.controlStripPID = pid; return; }
+    if (pid != self.controlStripPID) {
+        NSLog(@"TouchBarStatus: ControlStrip restarted (%d -> %d)", self.controlStripPID, pid);
+        self.controlStripPID = pid;
+        [self reinstallTrayItem];
+    }
+}
+
+- (void)restartReassertTimer {
+    [self.reassertTimer invalidate];
+    self.reassertTimer = nil;
+    double interval = ConfigDouble(kReassertInterval, 0, 3600);
+    if (interval <= 0) return;   // 0 disables the safety net
+    self.reassertTimer = [NSTimer scheduledTimerWithTimeInterval:interval
+                                                         repeats:YES
+                                                           block:^(NSTimer *t) {
+        [self checkControlStripRestart];
+        [self assertPresence];
+    }];
+}
+
+#pragma mark Config
+
+- (void)configChanged:(NSNotification *)note {
+    [self restartReassertTimer];
+    NSRunningApplication *front = [NSWorkspace sharedWorkspace].frontmostApplication;
+    if (front) [self applyApp:front flash:NO];   // re-render at any new sizes
 }
 
 #pragma mark Focus tracking
@@ -192,16 +309,12 @@ static const CGFloat kFlashIconSize = 26.0;
 - (void)applyApp:(NSRunningApplication *)app flash:(BOOL)shouldFlash {
     NSString *name = app.localizedName ?: @"Unknown";
     NSImage *icon = app.icon;
-    self.currentName = name;
 
     [self.trayView setIcon:icon name:name];
     [self.flashView setIcon:icon name:name];
+    [self assertPresence];
 
-    // The Control Strip drops registrations when ControlStrip.app restarts,
-    // so re-assert presence on every switch. Cheap and idempotent.
-    DFRElementSetControlStripPresenceForIdentifier(kTrayIdentifier, YES);
-
-    if (shouldFlash) [self showFlash];
+    if (shouldFlash && ConfigBool(kFlashEnabled)) [self showFlash];
     NSLog(@"TouchBarStatus: focus -> %@", name);
 }
 
@@ -210,12 +323,10 @@ static const CGFloat kFlashIconSize = 26.0;
 - (void)showFlash {
     if (!self.flashVisible) {
         if ([NSTouchBar respondsToSelector:@selector(presentSystemModalTouchBar:placement:systemTrayItemIdentifier:)]) {
-            [NSTouchBar presentSystemModalTouchBar:self.flashBar
-                                         placement:1
+            [NSTouchBar presentSystemModalTouchBar:self.flashBar placement:1
                           systemTrayItemIdentifier:kTrayIdentifier];
         } else {
-            [NSTouchBar presentSystemModalFunctionBar:self.flashBar
-                                            placement:1
+            [NSTouchBar presentSystemModalFunctionBar:self.flashBar placement:1
                              systemTrayItemIdentifier:kTrayIdentifier];
         }
         self.flashVisible = YES;
@@ -223,11 +334,9 @@ static const CGFloat kFlashIconSize = 26.0;
     }
     // Restart the countdown so rapid cmd-tabbing keeps showing the latest app.
     [self.dismissTimer invalidate];
-    self.dismissTimer = [NSTimer scheduledTimerWithTimeInterval:kFlashDuration
+    self.dismissTimer = [NSTimer scheduledTimerWithTimeInterval:ConfigDouble(kFlashDuration, 0.2, 10.0)
                                                         repeats:NO
-                                                          block:^(NSTimer *t) {
-        [self hideFlash];
-    }];
+                                                          block:^(NSTimer *t) { [self hideFlash]; }];
 }
 
 - (void)hideFlash {
@@ -243,10 +352,12 @@ static const CGFloat kFlashIconSize = 26.0;
 
 - (void)applicationWillTerminate:(NSNotification *)note {
     [self.dismissTimer invalidate];
+    [self.reassertTimer invalidate];
     [self hideFlash];
     DFRElementSetControlStripPresenceForIdentifier(kTrayIdentifier, NO);
     [NSTouchBarItem removeSystemTrayItem:self.trayItem];
     [[NSWorkspace sharedWorkspace].notificationCenter removeObserver:self];
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 @end

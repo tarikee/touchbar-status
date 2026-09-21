@@ -29,6 +29,9 @@ but truncates "Brave Browser" to `B...`. Hence the flash.
 - macOS 11+ (developed and verified on macOS 26.4.1, Apple M1)
 - Xcode Command Line Tools (`xcode-select --install`)
 
+Builds as a **universal binary** (`x86_64` + `arm64`). Most Touch Bar Macs are
+Intel, so the Intel slice matters more than the Apple Silicon one.
+
 ## Permissions
 
 **None.** `NSWorkspace`'s `frontmostApplication` and its activation
@@ -50,6 +53,27 @@ it starts at login and restarts if it ever exits.
 ```
 
 Removes all of it.
+
+## Configuration
+
+Everything is settable from a shell — deliberately, since this runs on a
+machine where System Settings may be unreachable. Changes apply **live**, with
+no restart.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `FlashEnabled` | `YES` | Show the full-width name flash on app switch |
+| `FlashDuration` | `1.5` | Seconds the flash stays up (0.2–10) |
+| `TrayIconSize` | `24` | Control Strip icon size in points (8–30) |
+| `FlashIconSize` | `26` | Flash icon size in points (8–30) |
+| `FlashFontSize` | `18` | Flash label size in points (8–26) |
+| `ReassertInterval` | `15` | Seconds between Control Strip presence checks; `0` disables |
+
+```sh
+defaults write com.tarik.touchbarstatus FlashDuration -float 2.5
+defaults write com.tarik.touchbarstatus FlashEnabled -bool NO     # icon only
+defaults delete com.tarik.touchbarstatus                          # back to defaults
+```
 
 ## Build only
 
@@ -79,8 +103,19 @@ Focus tracking itself is entirely public API:
 
 ### Control Strip re-registration
 
-`ControlStrip.app` drops third-party registrations when it restarts, so the
-app re-asserts its presence on every app switch. Cheap and idempotent.
+`ControlStrip.app` drops third-party registrations when it restarts, which
+would leave the Touch Bar silently empty. Three overlapping defences:
+
+1. Presence is re-asserted on every app switch (cheap, idempotent).
+2. A timer re-asserts every `ReassertInterval` seconds.
+3. That same timer watches `ControlStrip.app`'s **pid**. A change means it
+   restarted, and the tray item is fully reinstalled (view and all).
+
+Step 3 polls rather than observing a notification because
+`NSWorkspaceDidLaunchApplicationNotification` is **not** posted for background
+agents like ControlStrip — verified by killing ControlStrip and watching the
+observer never fire. Recovery is verified: killing ControlStrip produces
+`ControlStrip restarted (39804 -> 40412)` followed by `tray item reinstalled`.
 
 ## Developer tools
 

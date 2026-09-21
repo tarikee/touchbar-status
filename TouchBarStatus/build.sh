@@ -9,7 +9,10 @@ SDK="$(xcrun --show-sdk-path)"
 rm -rf build
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-clang -fobjc-arc -O2 -mmacosx-version-min=11.0 \
+# Universal: most Touch Bar Macs are Intel, so ship both slices.
+ARCHS="-arch arm64 -arch x86_64"
+
+clang -fobjc-arc -O2 -mmacosx-version-min=11.0 $ARCHS \
   -framework Cocoa \
   -F"$SDK/System/Library/PrivateFrameworks" -framework DFRFoundation \
   -o "$APP/Contents/MacOS/TouchBarStatus" \
@@ -35,3 +38,4 @@ echo '</plist>' >> "$APP/Contents/Info.plist"
 
 codesign --force --sign - "$APP"
 echo "Built: $APP"
+lipo -archs "$APP/Contents/MacOS/TouchBarStatus" | sed 's/^/Architectures: /' 
