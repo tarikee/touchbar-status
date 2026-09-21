@@ -11,15 +11,20 @@
 #   ~/Desktop/"touchbar status"/TouchBarStatus/tools/ensure-ax-instance.sh &!
 
 APP="$HOME/Applications/TouchBarStatus.app/Contents/MacOS/TouchBarStatus"
-PATTERN="TouchBarStatus.app/Contents/MacOS"
 [ -x "$APP" ] || exit 0
+
+# Match the executable's exact command line, never a substring: any shell whose
+# command line merely mentions this path (a script containing it, an editor, a
+# grep) matches a loose `pgrep -f` and would be killed or signalled by mistake.
+match()  { pgrep -fx "$APP"; }
+killall_() { pkill -fx "$APP"; }
 
 start() { nohup "$APP" >/dev/null 2>&1 & disown 2>/dev/null; }
 
-if pgrep -f "$PATTERN" >/dev/null 2>&1; then
+if match >/dev/null 2>&1; then
   trusted=$(defaults read com.tarik.touchbarstatus LastLaunchAXTrusted 2>/dev/null)
   [ "$trusted" = "1" ] && exit 0          # already the good one
-  pkill -f "$PATTERN" 2>/dev/null
+  killall_ 2>/dev/null
   sleep 0.5
 fi
 start

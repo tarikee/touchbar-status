@@ -12,7 +12,9 @@ for ((i=0; i<TIMEOUT*4; i++)); do
     "$DIR/capture" "$OUTDIR/f%d.png" 8.0 &
     CAP=$!
     sleep 1
-    pkill -USR1 -f "TouchBarStatus.app/Contents/MacOS"
+    # -fx, not -f: this script's own command line contains that path, and a
+    # loose match would send SIGUSR1 to our own shell and kill the test.
+    pkill -USR1 -fx "$HOME/Applications/TouchBarStatus.app/Contents/MacOS/TouchBarStatus"
     wait $CAP
     echo done
     exit 0
