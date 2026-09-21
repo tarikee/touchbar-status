@@ -24,7 +24,10 @@ cat > "$PLIST" <<PLISTEOF
   <key>ProgramArguments</key>
   <array><string>$DEST/Contents/MacOS/TouchBarStatus</string></array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <!-- Deliberately false: tools/ensure-ax-instance.sh replaces this instance
+       with an Accessibility-inheriting one when a terminal opens. KeepAlive
+       would restart this copy and the two would fight. -->
+  <key>KeepAlive</key><false/>
   <key>ProcessType</key><string>Interactive</string>
 </dict>
 </plist>

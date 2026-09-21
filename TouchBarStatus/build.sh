@@ -16,7 +16,7 @@ clang -fobjc-arc -O2 -mmacosx-version-min=11.0 $ARCHS \
   -framework Cocoa \
   -F"$SDK/System/Library/PrivateFrameworks" -framework DFRFoundation \
   -o "$APP/Contents/MacOS/TouchBarStatus" \
-  src/main.m
+  src/*.m
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

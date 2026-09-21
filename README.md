@@ -54,6 +54,58 @@ it starts at login and restarts if it ever exits.
 
 Removes all of it.
 
+## Picking an app or window
+
+Tap the Control Strip icon to open a two-level picker:
+
+1. **Applications**, most recently used first, so it reads like cmd-tab. An
+   app with several windows is labelled `Brave Browser (3)`.
+2. **Windows** of that app, by title. Tapping one raises that specific window.
+
+Apps that are several processes (Alacritty opens one per window) and apps that
+are one process with several windows (Brave) both collapse into a single
+first-level entry, so terminal sessions appear by name:
+
+```
+Alacritty                 procs=3  windows=3
+      - ✳ Claude Code
+      - ◑ Directory check
+      - ✳ What session is this
+Brave Browser             procs=1  windows=3
+```
+
+`‹` goes back, `✕` closes, and the picker closes itself after
+`PickerTimeout` seconds so it never holds the bar hostage.
+
+### Accessibility, and why the launcher is odd
+
+Window titles and raising a specific window need **Accessibility**. Everything
+else — the icon, the flash, focus tracking, the app list — needs nothing.
+
+macOS grants Accessibility per *responsible process*: a binary launched from a
+terminal that holds the grant inherits it, while the same binary started by
+launchd does not. Measured on this machine: `AXIsProcessTrusted` is `YES` from
+a shell inside Alacritty and `NO` for the identical binary launched by
+LaunchServices.
+
+So `tools/ensure-ax-instance.sh`, invoked from `~/.zshrc`, replaces a
+non-trusted instance with a trusted one whenever a terminal opens. The
+LaunchAgent still starts a copy at login (so the icon is there immediately)
+with `KeepAlive` set to **false**, so it does not fight the replacement.
+
+The app reports which mode it is in:
+
+```sh
+defaults read com.tarik.touchbarstatus LastLaunchAXTrusted   # 1 = full, 0 = app list only
+```
+
+Without Accessibility it degrades cleanly: the picker still lists apps and
+switches between them, it just cannot drill into windows.
+
+The proper fix, once a display is available, is to add TouchBarStatus to
+System Settings → Privacy & Security → Accessibility. Then the launchd copy
+works fully and the `~/.zshrc` line can be removed.
+
 ## Configuration
 
 Everything is settable from a shell — deliberately, since this runs on a
@@ -68,6 +120,7 @@ no restart.
 | `FlashIconSize` | `26` | Flash icon size in points (8–30) |
 | `FlashFontSize` | `18` | Flash label size in points (8–26) |
 | `ReassertInterval` | `15` | Seconds between Control Strip presence checks; `0` disables |
+| `PickerTimeout` | `10` | Seconds before the picker closes itself (2–60) |
 
 ```sh
 defaults write com.tarik.touchbarstatus FlashDuration -float 2.5
@@ -151,7 +204,10 @@ bar is lit.
 
 ```
 TouchBarStatus/
-  src/main.m        the app
+  src/main.m        app delegate, focus tracking, the name flash
+  src/Picker.m      the two-level app/window picker
+  src/AppGroup.m    groups processes and windows into one entry per app
+  src/WindowList.m  Accessibility window enumeration and raising
   build.sh          builds the .app bundle
   install.sh        build + install + LaunchAgent
   uninstall.sh      remove everything

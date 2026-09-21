@@ -28,6 +28,9 @@
 //
 
 #import <Cocoa/Cocoa.h>
+#import "Picker.h"
+#import "WindowList.h"
+#import "AppGroup.h"
 
 #pragma mark - Private DFRFoundation API
 
@@ -62,6 +65,10 @@ static NSString *const kTrayIconSize     = @"TrayIconSize";
 static NSString *const kFlashIconSize    = @"FlashIconSize";
 static NSString *const kFlashFontSize    = @"FlashFontSize";
 static NSString *const kReassertInterval = @"ReassertInterval";
+static NSString *const kPickerTimeout    = @"PickerTimeout";
+/// Written on launch so the shell helper can tell whether the running
+/// instance inherited Accessibility, and relaunch it from the terminal if not.
+static NSString *const kLastLaunchAXKey  = @"LastLaunchAXTrusted";
 
 static void RegisterDefaultConfig(void) {
     [[NSUserDefaults standardUserDefaults] registerDefaults:@{
@@ -71,6 +78,7 @@ static void RegisterDefaultConfig(void) {
         kFlashIconSize:    @26.0,
         kFlashFontSize:    @18.0,
         kReassertInterval: @15.0,
+        kPickerTimeout:    @10.0,
     }];
 }
 
@@ -89,6 +97,7 @@ static BOOL ConfigBool(NSString *key) {
 #pragma mark - Tray view (permanent Control Strip icon)
 
 @interface TrayView : NSView
+@property (strong) NSButton *button;
 @property (strong) NSImageView *iconView;
 @property (strong) NSLayoutConstraint *iconWidth;
 @property (strong) NSLayoutConstraint *iconHeight;
@@ -102,7 +111,20 @@ static BOOL ConfigBool(NSString *key) {
     _iconView = [[NSImageView alloc] initWithFrame:NSZeroRect];
     _iconView.imageScaling = NSImageScaleProportionallyDown;
     _iconView.translatesAutoresizingMaskIntoConstraints = NO;
+    _iconView.hidden = YES;   // the button carries the image; kept for sizing
     [self addSubview:_iconView];
+
+    _button = [NSButton buttonWithTitle:@"" target:nil action:nil];
+    _button.bordered = NO;
+    _button.imagePosition = NSImageOnly;
+    _button.translatesAutoresizingMaskIntoConstraints = NO;
+    [self addSubview:_button];
+    [NSLayoutConstraint activateConstraints:@[
+        [_button.topAnchor constraintEqualToAnchor:self.topAnchor],
+        [_button.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
+        [_button.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],
+        [_button.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
+    ]];
 
     _iconWidth  = [_iconView.widthAnchor constraintEqualToConstant:24];
     _iconHeight = [_iconView.heightAnchor constraintEqualToConstant:24];
@@ -121,6 +143,7 @@ static BOOL ConfigBool(NSString *key) {
     NSImage *sized = [icon copy];
     sized.size = NSMakeSize(size, size);
     self.iconView.image = sized;
+    self.button.image = sized;
     self.toolTip = name;
 }
 
@@ -192,6 +215,10 @@ static BOOL ConfigBool(NSString *key) {
 @property (strong) NSTimer *reassertTimer;
 @property (assign) BOOL flashVisible;
 @property (assign) pid_t controlStripPID;
+@property (strong) Picker *picker;
+/// pids in most-recently-used order, so the picker reads like cmd-tab.
+@property (strong) NSMutableArray<NSNumber *> *mruPIDs;
+- (void)trayTapped:(id)sender;
 @end
 
 @implementation AppDelegate
@@ -199,6 +226,17 @@ static BOOL ConfigBool(NSString *key) {
 - (void)applicationDidFinishLaunching:(NSNotification *)note {
     RegisterDefaultConfig();
     DFRSystemModalShowsCloseBoxWhenFrontMost(NO);
+
+    self.mruPIDs = [NSMutableArray array];
+
+    BOOL ax = [WindowList accessibilityAvailable];
+    [[NSUserDefaults standardUserDefaults] setBool:ax forKey:kLastLaunchAXKey];
+    NSLog(@"TouchBarStatus: accessibility %@ - window picking %@",
+          ax ? @"granted" : @"NOT granted",
+          ax ? @"enabled" : @"disabled (app list only)");
+
+    self.picker = [[Picker alloc] init];
+    self.picker.trayIdentifier = kTrayIdentifier;
 
     [self buildTrayItem];
     [self buildFlashBar];
@@ -218,6 +256,14 @@ static BOOL ConfigBool(NSString *key) {
     NSRunningApplication *front = [NSWorkspace sharedWorkspace].frontmostApplication;
     if (front) [self applyApp:front flash:NO];
 
+    // Reinstate the tray item after the picker closes, same teardown problem
+    // the flash has.
+    __weak AppDelegate *weakSelf = self;
+    self.picker.onDismiss = ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ [weakSelf reinstallTrayItem]; });
+    };
+
     NSLog(@"TouchBarStatus: ready");
 }
 
@@ -225,6 +271,8 @@ static BOOL ConfigBool(NSString *key) {
 
 - (void)buildTrayItem {
     self.trayView = [[TrayView alloc] initWithFrame:NSMakeRect(0, 0, 64, 30)];
+    self.trayView.button.target = self;
+    self.trayView.button.action = @selector(trayTapped:);
     self.trayItem = [[NSCustomTouchBarItem alloc] initWithIdentifier:kTrayIdentifier];
     self.trayItem.view = self.trayView;
     [NSTouchBarItem addSystemTrayItem:self.trayItem];
@@ -306,15 +354,52 @@ static BOOL ConfigBool(NSString *key) {
     if (app) [self applyApp:app flash:YES];
 }
 
+- (void)noteMRU:(NSRunningApplication *)app {
+    NSNumber *pid = @(app.processIdentifier);
+    [self.mruPIDs removeObject:pid];
+    [self.mruPIDs insertObject:pid atIndex:0];
+}
+
+/// Regular (Dock-visible) apps, most recently used first, excluding ourselves.
+- (NSArray<NSRunningApplication *> *)orderedApps {
+    NSMutableArray<NSRunningApplication *> *ordered = [NSMutableArray array];
+    NSMutableArray<NSRunningApplication *> *rest = [NSMutableArray array];
+
+    NSMutableDictionary<NSNumber *, NSRunningApplication *> *byPID = [NSMutableDictionary dictionary];
+    for (NSRunningApplication *a in [NSWorkspace sharedWorkspace].runningApplications) {
+        if (a.activationPolicy != NSApplicationActivationPolicyRegular) continue;
+        if (a.processIdentifier == NSProcessInfo.processInfo.processIdentifier) continue;
+        byPID[@(a.processIdentifier)] = a;
+    }
+    for (NSNumber *pid in self.mruPIDs) {
+        NSRunningApplication *a = byPID[pid];
+        if (a) { [ordered addObject:a]; [byPID removeObjectForKey:pid]; }
+    }
+    for (NSRunningApplication *a in byPID.allValues) [rest addObject:a];
+    [rest sortUsingComparator:^NSComparisonResult(NSRunningApplication *x, NSRunningApplication *y) {
+        return [(x.localizedName ?: @"") caseInsensitiveCompare:(y.localizedName ?: @"")];
+    }];
+    [ordered addObjectsFromArray:rest];
+    return ordered;
+}
+
+- (void)trayTapped:(id)sender {
+    if (self.picker.visible) { [self.picker dismiss]; return; }
+    [self hideFlash];
+    [self.picker presentWithGroups:[AppGroup groupsFromApplications:[self orderedApps]]];
+}
+
 - (void)applyApp:(NSRunningApplication *)app flash:(BOOL)shouldFlash {
     NSString *name = app.localizedName ?: @"Unknown";
     NSImage *icon = app.icon;
 
+    [self noteMRU:app];
     [self.trayView setIcon:icon name:name];
     [self.flashView setIcon:icon name:name];
     [self assertPresence];
 
-    if (shouldFlash && ConfigBool(kFlashEnabled)) [self showFlash];
+    // Never let the flash steal the bar back while the picker is open.
+    if (shouldFlash && ConfigBool(kFlashEnabled) && !self.picker.visible) [self showFlash];
     NSLog(@"TouchBarStatus: focus -> %@", name);
 }
 
@@ -370,11 +455,41 @@ static BOOL ConfigBool(NSString *key) {
 
 @end
 
+/// `--dump` prints what the picker would show and exits. Lets the picker's
+/// data layer be verified from a shell, without tapping the Touch Bar.
+static int DumpApps(void) {
+    BOOL ax = [WindowList accessibilityAvailable];
+    printf("accessibility: %s\n", ax ? "GRANTED" : "NOT GRANTED (app list only)");
+    NSMutableArray<NSRunningApplication *> *regular = [NSMutableArray array];
+    for (NSRunningApplication *a in [NSWorkspace sharedWorkspace].runningApplications) {
+        if (a.activationPolicy == NSApplicationActivationPolicyRegular) [regular addObject:a];
+    }
+    for (AppGroup *g in [AppGroup groupsFromApplications:regular]) {
+        NSArray<AppWindow *> *ws = [g windows];
+        printf("%-24s  procs=%lu  windows=%lu\n", g.name.UTF8String,
+               (unsigned long)g.processes.count, (unsigned long)ws.count);
+        for (AppWindow *w in ws) printf("      - %s\n", w.title.UTF8String);
+    }
+    return 0;
+}
+
+static AppDelegate *gDelegate = nil;
+
+/// SIGUSR1 opens the picker, so it can be triggered without a physical tap.
+static void HandleUSR1(int sig) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [gDelegate trayTapped:nil]; });
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
+        for (int i = 1; i < argc; i++) {
+            if (strcmp(argv[i], "--dump") == 0) return DumpApps();
+        }
         NSApplication *app = [NSApplication sharedApplication];
         AppDelegate *delegate = [AppDelegate new];
+        gDelegate = delegate;
         app.delegate = delegate;
+        signal(SIGUSR1, HandleUSR1);
         [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
         [app run];
     }
