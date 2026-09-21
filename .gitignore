@@ -1,0 +1,12 @@
+build/
+backup/
+*.o
+*.dSYM/
+.DS_Store
+
+# Compiled helper binaries (rebuild with build.sh / the commands in README)
+TouchBarStatus/tools/capture
+TouchBarStatus/tools/wake
+spike/spike
+spike/capture
+spike/Spike.app/
