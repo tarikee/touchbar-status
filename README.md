@@ -134,6 +134,12 @@ clang -fobjc-arc -mmacosx-version-min=13.0 -framework Cocoa \
 writes a PNG — genuinely useful, since `screencapture` cannot see the Touch
 Bar.
 
+**Note:** `DFRElementGetControlStripPresenceForIdentifier` is not a usable
+readback — it returns 0 even immediately after a successful
+`...SetControlStripPresence...` call, both in-process and cross-process. There
+is no way to query whether the item is really there; only a screenshot tells
+you.
+
 **Note:** the Touch Bar panel dims after ~75s without real HID input, and
 captures come back solid black when it does. `tools/wake.m` attempts to relight
 it via `DFRBrightnessClientDisplayTurnOn`; the calls all report success but the

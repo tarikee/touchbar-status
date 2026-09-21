@@ -348,6 +348,14 @@ static BOOL ConfigBool(NSString *key) {
     }
     self.flashVisible = NO;
     NSLog(@"TouchBarStatus: flash dismissed");
+
+    // Dismissing the system-modal bar tears our item out of the Control Strip
+    // (observed: the icon is present before the first flash and gone after).
+    // Nothing reports this - DFRElementGetControlStripPresenceForIdentifier
+    // returns 0 even right after a successful set - so reinstall it
+    // unconditionally once the teardown has settled.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ [self reinstallTrayItem]; });
 }
 
 - (void)applicationWillTerminate:(NSNotification *)note {
